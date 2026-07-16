@@ -3,19 +3,27 @@
   "version": "2.0.1",
   "dependencies": {
     "@fortawesome/fontawesome-free": "5.15.2",
+    "@reduxjs/toolkit": "^2.12.0",
     "ajv": "^8.16.0",
     "bootstrap": "4.6.0",
     "chartist": "0.11.4",
+    "google-protobuf": "^4.0.2",
+    "grpc-tools": "^1.13.1",
+    "grpc-web": "^2.0.2",
     "gulp": "4.0.2",
     "gulp-append-prepend": "1.0.9",
+    "protobufjs": "^8.7.0",
+    "protoc-gen-grpc-web": "^1.5.0",
     "react": ">=16.8.0",
     "react-bootstrap": "2.4.0",
     "react-chartist": "0.14.4",
     "react-dom": ">=16.8.0",
     "react-notification-alert": "0.0.13",
+    "react-redux": "^9.3.0",
     "react-router": "5.2.0",
     "react-router-dom": "5.2.0",
     "react-scripts": "5.0.1",
+    "react-window": "^2.2.7",
     "reactstrap": "8.8.1",
     "sass": "1.53.0"
   },
@@ -25,6 +33,9 @@
   },
   "scripts": {
     "start": "react-scripts start",
+    "start:frontend": "react-scripts start",
+    "start:backend": "dotnet run --project ./backend/ReportingBackend/ReportingBackend.csproj",
+    "start:all": "concurrently -n FRONTEND,BACKEND -c blue,green \"npm run start:frontend\" \"npm run start:backend\"",
     "build": "cross-env CI=false react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
@@ -50,6 +61,7 @@
     ]
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "cross-env": "^7.0.3"
   }
 }
