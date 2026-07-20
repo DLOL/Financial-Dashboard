@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import ChartistGraph from "react-chartist";
 import { useSelector } from "react-redux";
+import { List } from "react-window";
 import { useTransactionStream } from "../hooks/useTransactionStream";
 import { styles, getAmountColor, getStatusColor } from "./dashboardStyles";
 import { RootState } from "../store/transactionStore";
@@ -57,15 +58,28 @@ function formatRM(amount: number, fractionDigits = 2): string {
   })}`;
 }
 
-function TransactionRow({ txn, index }: { txn: Transaction; index: number }) {
+interface TransactionRowProps {
+  index: number;
+  style: React.CSSProperties;
+  transactions: Transaction[];
+}
+
+/**
+ * Virtualized Row Renderer for react-window to handle 10,000+ entries without DOM lag.
+ */
+function TransactionRow({ index, style, transactions }: TransactionRowProps) {
+  const txn = transactions ? transactions[index] : null;
+  if (!txn) return null;
+
   const time = new Date(txn.timestamp).toLocaleTimeString();
-  const rowStyle = {
+  const combinedStyle = {
+    ...style,
     ...sx.txnRow.base,
     ...(index % 2 === 0 ? sx.txnRow.even : sx.txnRow.odd),
   };
 
   return (
-    <div style={rowStyle}>
+    <div style={combinedStyle}>
       <span style={sx.txnCol.id}>{txn.id}</span>
       <span style={{ ...sx.txnCol.category, color: CATEGORY_COLORS[txn.category] }}>
         {txn.category}
@@ -211,7 +225,7 @@ export default function Dashboard() {
             <div style={sx.card.footer}>
               <hr style={sx.divider} />
               <i className="fas fa-plug" style={{ marginRight: 4 }}></i>
-              SSE stream · packets: {totalCount.toLocaleString()}
+              gRPC-Web stream · packets: {totalCount.toLocaleString()}
             </div>
           </div>
         </div>
@@ -223,8 +237,8 @@ export default function Dashboard() {
             <div style={sx.card.header}>
               <h4 style={sx.card.title}>Live Transactions</h4>
               <p style={sx.card.subtitle}>
-                Showing latest {transactions.length.toLocaleString()} of {" "}
-                {totalCount.toLocaleString()} - buffer flushes every 500ms
+                Showing latest {transactions.length.toLocaleString()} of{" "}
+                {totalCount.toLocaleString()} - virtualized react-window list (500ms buffer)
               </p>
             </div>
             <div style={sx.card.bodyNoPad}>
@@ -235,16 +249,18 @@ export default function Dashboard() {
                 <span style={sx.tableHeader.status}>Status</span>
                 <span style={sx.tableHeader.time}>Time</span>
               </div>
-              <div style={sx.listScroll}>
-                {transactions.map((txn, i) => (
-                  <TransactionRow key={txn.id} txn={txn} index={i} />
-                ))}
-              </div>
+              <List
+                style={{ height: 400 }}
+                rowCount={transactions.length}
+                rowHeight={42}
+                rowComponent={TransactionRow}
+                rowProps={{ transactions }}
+              />
             </div>
             <div style={sx.card.footer}>
               <hr style={sx.divider} />
               <i className="fas fa-bolt" style={{ marginRight: 4 }}></i>
-              Scrollable list - Redux store capped at 10,000 entries
+              react-window Virtualized List - handles 10,000+ entries without DOM lag
             </div>
           </div>
         </div>

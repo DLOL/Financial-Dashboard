@@ -2,10 +2,11 @@ import { useEffect, useRef } from "react";
 import { useDispatch } from "react-redux";
 import { AppDispatch, flushBuffer, setStreamStatus } from "../store/transactionStore";
 import { Transaction, TransactionCategory } from "../store/transactionTypes";
-
-declare const process: {
-  env: Record<string, string | undefined>;
-};
+import {
+  streamTransactions,
+  TransactionResponse as GrpcTransactionResponse,
+} from "../grpc/reportingClient";
+import { ClientReadableStream } from "grpc-web";
 
 const CATEGORIES: TransactionCategory[] = [
   "Payment",
@@ -16,19 +17,6 @@ const CATEGORIES: TransactionCategory[] = [
 ];
 
 const FLUSH_INTERVAL_MS = 500;
-const SSE_STREAM_URL =
-  process.env.REACT_APP_STREAM_URL ?? "http://localhost:5178/api/transactions/stream";
-
-interface SseTransactionEvent {
-  transactionId: string;
-  category: string;
-  amount: number;
-  status: string;
-  occurredAt: {
-    seconds: number | string;
-    nanos: number;
-  };
-}
 
 function isTransactionCategory(value: string): value is TransactionCategory {
   return CATEGORIES.includes(value as TransactionCategory);
@@ -38,16 +26,23 @@ function isTransactionStatus(value: string): value is Transaction["status"] {
   return value === "success" || value === "failed";
 }
 
+/**
+ * Maps Protobuf Timestamp (seconds + nanos) to JavaScript Date object
+ * preserving sub-second millisecond precision.
+ */
 function protoTimestampToDate(seconds: number, nanos: number): Date {
-  return new Date(seconds * 1000 + Math.floor(nanos / 1_000_000));
+  const ms = seconds * 1000 + Math.floor(nanos / 1_000_000);
+  return new Date(ms);
 }
 
-function mapSseToTransaction(payload: SseTransactionEvent): Transaction {
+function mapProtoToTransaction(payload: GrpcTransactionResponse): Transaction {
+  const seconds = Number(payload.occurredAt?.seconds || 0);
+  const nanos = Number(payload.occurredAt?.nanos || 0);
   return {
     id: payload.transactionId,
     category: isTransactionCategory(payload.category) ? payload.category : "Payment",
     amount: payload.amount,
-    timestamp: protoTimestampToDate(Number(payload.occurredAt.seconds), payload.occurredAt.nanos).toISOString(),
+    timestamp: protoTimestampToDate(seconds, nanos).toISOString(),
     status: isTransactionStatus(payload.status) ? payload.status : "failed",
   };
 }
@@ -56,7 +51,7 @@ export function useTransactionStream(): void {
   const dispatch = useDispatch<AppDispatch>();
 
   const bufferRef = useRef<Transaction[]>([]);
-  const sseStreamRef = useRef<EventSource | null>(null);
+  const grpcStreamRef = useRef<ClientReadableStream<any> | null>(null);
   const flushRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
@@ -66,10 +61,15 @@ export function useTransactionStream(): void {
   useEffect(() => {
     let mounted = true;
 
+    // Explicitly cancels gRPC stream on cleanup to prevent memory leaks (Part C Constraint)
     function stopStream() {
-      if (sseStreamRef.current) {
-        sseStreamRef.current.close();
-        sseStreamRef.current = null;
+      if (grpcStreamRef.current) {
+        try {
+          grpcStreamRef.current.cancel();
+        } catch {
+          // Stream might already be closed
+        }
+        grpcStreamRef.current = null;
       }
     }
 
@@ -81,38 +81,47 @@ export function useTransactionStream(): void {
 
     function startStream() {
       if (!mounted) return;
+      stopStream();
       dispatchRef.current(setStreamStatus("reconnecting"));
 
-      const source = new EventSource(SSE_STREAM_URL);
-      sseStreamRef.current = source;
-
-      source.onmessage = (event) => {
-        if (!mounted || !event.data) return;
-        try {
-          const payload = JSON.parse(event.data) as SseTransactionEvent;
-          pushTx(mapSseToTransaction(payload));
-        } catch {
-          // Ignore malformed payloads and keep stream alive.
+      const stream = streamTransactions(
+        { reportId: "live-report", maxItems: 10000 },
+        {
+          onData: (data: GrpcTransactionResponse) => {
+            if (!mounted) return;
+            pushTx(mapProtoToTransaction(data));
+          },
+          onEnd: () => {
+            if (!mounted) return;
+            dispatchRef.current(setStreamStatus("cached"));
+            scheduleReconnect();
+          },
+          onError: (err) => {
+            if (!mounted) return;
+            stopStream();
+            dispatchRef.current(setStreamStatus("cached"));
+            scheduleReconnect();
+          },
         }
-      };
+      );
 
-      source.onerror = () => {
-        if (!mounted) return;
-        stopStream();
-        dispatchRef.current(setStreamStatus("cached"));
-        scheduleReconnect();
-      };
+      grpcStreamRef.current = stream;
     }
 
     function scheduleReconnect() {
+      if (!mounted) return;
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+
       const delay = Math.min(1000 * Math.pow(2, attemptRef.current), 30000);
       attemptRef.current += 1;
-      if (mounted) dispatchRef.current(setStreamStatus("reconnecting"));
+      dispatchRef.current(setStreamStatus("reconnecting"));
+
       reconnectRef.current = setTimeout(() => {
         if (mounted) startStream();
       }, delay);
     }
 
+    // 500ms Client-Side Buffer flush loop to prevent React render storms
     flushRef.current = setInterval(() => {
       if (mounted && bufferRef.current.length > 0) {
         dispatchRef.current(flushBuffer([...bufferRef.current]));
