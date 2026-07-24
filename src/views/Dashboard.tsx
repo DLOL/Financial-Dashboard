@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import ChartistGraph from "react-chartist";
+import React, { useMemo, useState, useEffect, useRef } from "react";
+import { CanvasPieChart } from "../components/CanvasPieChart";
 import { useSelector } from "react-redux";
 import { List } from "react-window";
 import { useTransactionStream } from "../hooks/useTransactionStream";
@@ -139,34 +139,29 @@ export default function Dashboard() {
     (state: RootState) => state.transactions
   );
 
-  const { totalRevenue, avgTransaction } = useMemo(() => {
-    let revenue = 0;
-    let successCount = 0;
-    for (const t of transactions) {
-      if (t.status === "success") {
-        revenue += t.amount;
-        successCount += 1;
-      }
-    }
-    return {
-      totalRevenue: revenue,
-      avgTransaction: successCount > 0 ? revenue / successCount : 0,
-    };
-  }, [transactions]);
+  const [analytics, setAnalytics] = useState({
+    totalRevenue: 0,
+    avgTransaction: 0,
+    categoryCounts: [0, 0, 0, 0, 0],
+  });
 
-  const categoryData = useMemo(() => {
-    const counts = Object.fromEntries(CATEGORIES.map((c) => [c, 0])) as Record<
-      TransactionCategory,
-      number
-    >;
-    for (const t of transactions) {
-      counts[t.category] += 1;
-    }
+  const workerRef = useRef<Worker | null>(null);
 
-    return {
-      labels: CATEGORIES,
-      series: CATEGORIES.map((c) => counts[c]),
+  useEffect(() => {
+    workerRef.current = new Worker(new URL("../workers/analyticsWorker.ts", import.meta.url));
+    workerRef.current.onmessage = (event) => {
+      const { totalRevenue, avgTransaction, categoryCounts } = event.data;
+      setAnalytics({ totalRevenue, avgTransaction, categoryCounts });
     };
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (workerRef.current) {
+      workerRef.current.postMessage(transactions);
+    }
   }, [transactions]);
 
   const statusCfg = STATUS_CONFIG[streamStatus] || STATUS_CONFIG.connecting;
@@ -179,7 +174,7 @@ export default function Dashboard() {
             icon="fas fa-money-bill-wave"
             iconColor="#2dce89"
             label="Total Revenue"
-            value={formatRM(totalRevenue, 0)}
+            value={formatRM(analytics.totalRevenue, 0)}
             footerIcon="fas fa-chart-line"
             footerText="Live stream total"
           />
@@ -189,7 +184,7 @@ export default function Dashboard() {
             icon="fas fa-calculator"
             iconColor="#fb6340"
             label="Avg Transaction"
-            value={formatRM(avgTransaction, 2)}
+            value={formatRM(analytics.avgTransaction, 2)}
             footerIcon="fas fa-check-circle"
             footerText="Per successful txn"
           />
@@ -273,41 +268,8 @@ export default function Dashboard() {
             </div>
             <div style={sx.card.body}>
               <div>
-                <style>
-                  {`
-                    .category-chart .ct-series-a .ct-slice-donut,
-                    .category-chart .ct-series-a .ct-slice-pie {
-                      stroke: ${CATEGORY_COLORS.Payment};
-                    }
-                    .category-chart .ct-series-b .ct-slice-donut,
-                    .category-chart .ct-series-b .ct-slice-pie {
-                      stroke: ${CATEGORY_COLORS.Refund};
-                    }
-                    .category-chart .ct-series-c .ct-slice-donut,
-                    .category-chart .ct-series-c .ct-slice-pie {
-                      stroke: ${CATEGORY_COLORS.Transfer};
-                    }
-                    .category-chart .ct-series-d .ct-slice-donut,
-                    .category-chart .ct-series-d .ct-slice-pie {
-                      stroke: ${CATEGORY_COLORS.Deposit};
-                    }
-                    .category-chart .ct-series-e .ct-slice-donut,
-                    .category-chart .ct-series-e .ct-slice-pie {
-                      stroke: ${CATEGORY_COLORS.Withdrawal};
-                    }
-                  `}
-                </style>
                 <div className="category-chart">
-                  <ChartistGraph
-                    data={categoryData}
-                    type="Pie"
-                    options={{
-                      height: "200px",
-                      donut: true,
-                      donutWidth: 35,
-                      showLabel: false,
-                    }}
-                  />
+                  <CanvasPieChart categoryCounts={analytics.categoryCounts} />
                 </div>
               </div>
               <div style={sx.categoryLegend.container}>
@@ -325,7 +287,7 @@ export default function Dashboard() {
                       {cat}
                     </span>
                     <strong style={sx.categoryLegend.count}>
-                      {categoryData.series[i].toLocaleString()}
+                      {analytics.categoryCounts[i].toLocaleString()}
                     </strong>
                   </div>
                 ))}

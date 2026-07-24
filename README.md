@@ -5,10 +5,13 @@ A high-performance monitoring system designed to ingest 100 transactions/sec via
 ## 1. Core Architecture
 - **Backend (.NET 8/9):** Uses gRPC Server Streaming for efficient, binary-encoded data transmission.
 - **Frontend (React/TypeScript):** Uses Redux Toolkit to centralize data and `react-window` for list virtualization.
+- **Background Calculations:** Uses a Web Worker to offload all transaction statistics calculations, keeping the main thread free.
+- **GPU-Accelerated Graphics:** Uses HTML5 Canvas 2D for the donut/pie chart to execute drawing operations on the GPU instead of rendering slow DOM-bound SVGs.
 - **Optimization:** Implements a 500ms buffering strategy to batch data updates, preventing UI performance degradation.
 
 ## 2. Key Architectural Solutions
 - **The "Render Storm" Solution:** Instead of rendering every transaction as it arrives, incoming packets are accumulated in a local memory buffer and flushed to the state exactly every 500ms. This reduces UI update frequency from 100/sec to 2/sec.
+- **Off-Thread Calculations:** All math loops (aggregating transaction volume and averaging totals) are delegated to a Web Worker, ensuring 0% main-thread blocking.
 - **Virtualized Rendering:** To handle 10,000+ records, the dashboard uses `react-window`, which only renders the rows currently visible on the user's screen.
 - **Resilience:** The system includes exponential backoff and jitter to automatically recover from connection drops, with a clear "Cached View" status for users.
 - **Precision:** Protobuf Timestamp fields (seconds/nanos) are converted using a custom helper to ensure full time precision for financial auditing.
